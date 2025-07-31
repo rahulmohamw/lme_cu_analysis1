@@ -36,7 +36,7 @@ jobs:
         
     - name: Run copper price analysis
       run: |
-        python analyze_copper.py
+        python lme_cu_analysis1.py
         
     - name: Deploy to GitHub Pages
       uses: peaceiris/actions-gh-pages@v3
