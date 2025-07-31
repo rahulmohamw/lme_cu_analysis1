@@ -2,6 +2,7 @@
 """
 LME Copper Price Analysis
 Runs in GitHub Actions every 6 h, generates docs/analysis.json
+FIXED VERSION: Corrected method name mismatch
 """
 
 from __future__ import annotations
@@ -111,7 +112,7 @@ class CopperPriceAnalyzer:
             "key_metrics": self._basic_stats(),
             "seasonality": self._seasonality(),
             "trend": self._trend(),
-            "monthly_fluctuations": self._monthly_fluct(),
+            "monthly_fluctuations": self._monthly_fluctuations(),  # FIXED: was _monthly_fluct()
             "weekly_patterns": self._weekly_patterns(),
         }
         # inject summary fields
