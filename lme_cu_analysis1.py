@@ -1,345 +1,282 @@
-# analyze_copper.py
-import pandas as pd
-import numpy as np
+#!/usr/bin/env python3
+"""
+LME Copper Price Analysis
+Runs in GitHub Actions every 6 h, generates docs/analysis.json
+"""
+
+from __future__ import annotations
+
 import json
-import requests
-from datetime import datetime
 import os
-from scipy import stats
+import sys
+import time
+from datetime import datetime
+from io import StringIO
 from statistics import mean, stdev
-import warnings
-warnings.filterwarnings('ignore')
+from typing import Any
+
+import numpy as np
+import pandas as pd
+import requests
+from requests.exceptions import RequestException
+from scipy import stats
+
+CSV_URL = (
+    "https://infilearnai.com/LME_Cu_Dashboard/"
+    "lme_copper_historical_data.csv"
+)
+MAX_RETRIES = 3
+BACKOFF = [5, 15, 45]  # seconds
+TIMEOUT = 30
+
 
 class CopperPriceAnalyzer:
-    def __init__(self):
-        self.df = None
-        self.analysis_results = {}
-        
-    def fetch_data_from_website(self):
-        """Fetch CSV data from infilearnai.com"""
-        csv_url = 'https://infilearnai.com/LME_Cu_Dashboard/lme_copper_historical_data.csv'
-        
-        try:
-            print(f"🔄 Fetching data from: {csv_url}")
-            
-            response = requests.get(csv_url, timeout=30)
-            response.raise_for_status()
-            
-            # Parse CSV
-            from io import StringIO
-            df = pd.read_csv(StringIO(response.text))
-            
-            print(f"✅ Raw data loaded. Shape: {df.shape}")
-            print(f"📊 Columns: {list(df.columns)}")
-            
-            # Auto-detect columns
-            date_col = self.find_date_column(df)
-            price_col = self.find_price_column(df)
-            
-            if not date_col or not price_col:
-                raise ValueError(f"Could not detect date/price columns from: {list(df.columns)}")
-            
-            print(f"📅 Date column: '{date_col}'")
-            print(f"💰 Price column: '{price_col}'")
-            
-            # Standardize names
-            df = df.rename(columns={date_col: 'Date', price_col: 'Price'})
-            
-            # Clean data
-            df['Date'] = pd.to_datetime(df['Date'], errors='coerce')
-            df = df.dropna(subset=['Date']).sort_values('Date')
-            
-            df['Price'] = pd.to_numeric(df['Price'], errors='coerce')
-            df = df.dropna(subset=['Price'])
-            df = df[df['Price'] > 0]
-            
-            # Add time features
-            df['Year'] = df['Date'].dt.year
-            df['Month'] = df['Date'].dt.month
-            df['MonthName'] = df['Date'].dt.month_name()
-            df['DayOfWeek'] = df['Date'].dt.dayofweek
-            df['DayName'] = df['Date'].dt.day_name()
-            
-            self.df = df
-            
-            print(f"🎯 Final dataset: {len(df)} records")
-            print(f"📆 Date range: {df['Date'].min()} to {df['Date'].max()}")
-            print(f"💵 Price range: ${df['Price'].min():.2f} to ${df['Price'].max():.2f}")
-            
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error fetching data: {e}")
-            return False
-    
-    def find_date_column(self, df):
-        """Auto-detect date column"""
-        for col in df.columns:
-            if any(word in col.lower() for word in ['date', 'time', 'day']):
-                try:
-                    pd.to_datetime(df[col].iloc[:5])
-                    return col
-                except:
-                    continue
-        return df.columns[0] if len(df.columns) > 0 else None
-    
-    def find_price_column(self, df):
-        """Auto-detect price column"""
-        for col in df.columns:
-            if any(word in col.lower() for word in ['price', 'copper', 'lme', 'settlement', 'cash']):
-                try:
-                    pd.to_numeric(df[col].iloc[:5])
-                    return col
-                except:
-                    continue
-        
-        # Find any numeric column
-        for col in df.select_dtypes(include=[np.number]).columns:
-            return col
-        return None
-    
-    def analyze_basic_stats(self):
-        """Calculate basic statistics"""
-        prices = self.df['Price'].tolist()
-        
-        return {
-            'average_price': round(mean(prices), 2),
-            'min_price': round(min(prices), 2),
-            'max_price': round(max(prices), 2),
-            'volatility': round((stdev(prices) / mean(prices)) * 100, 2),
-            'total_records': len(prices)
-        }
-    
-    def analyze_seasonality(self):
-        """Analyze seasonal patterns"""
-        # Monthly averages
-        monthly_avg = self.df.groupby('MonthName')['Price'].mean().round(2)
-        best_month = monthly_avg.idxmax()
-        
-        # Day of week averages
-        dow_avg = self.df.groupby('DayName')['Price'].mean().round(2)
-        best_day = dow_avg.idxmax()
-        
-        return {
-            'monthly': {'mean': monthly_avg.to_dict()},
-            'day_of_week': {'mean': dow_avg.to_dict()},
-            'best_month': best_month,
-            'best_day': best_day
-        }
-    
-    def analyze_trends(self):
-        """Analyze price trends"""
-        prices = self.df['Price'].values
-        x = np.arange(len(prices))
-        
-        # Linear regression
-        slope, intercept, r_value, p_value, std_err = stats.linregress(x, prices)
-        
-        direction = 'Upward' if slope > 0 else 'Downward' if slope < 0 else 'Flat'
-        
-        return {
-            'slope': round(slope, 6),
-            'r_squared': round(r_value**2, 4),
-            'trend_direction': direction
-        }
-    
-    def analyze_monthly_fluctuations(self):
-        """Month-over-month analysis"""
-        # Create year-month groups
-        self.df['YearMonth'] = self.df['Date'].dt.to_period('M')
-        monthly_avg = self.df.groupby('YearMonth')['Price'].mean()
-        
-        # Calculate month-over-month changes
-        mom_changes = monthly_avg.pct_change().dropna() * 100
-        
-        return {
-            'mom_changes': mom_changes.round(2).tolist(),
-            'mom_dates': [str(d) for d in mom_changes.index],
-            'base_price': round(monthly_avg.mean(), 2),
-            'volatility': round(mom_changes.std(), 2)
-        }
-    
-    def analyze_weekly_patterns(self):
-        """Weekly pattern analysis"""
-        dow_stats = self.df.groupby('DayName')['Price'].agg(['mean', 'count']).round(2)
-        best_day = dow_stats['mean'].idxmax()
-        overall_avg = self.df['Price'].mean()
-        
-        # Weekly performance vs baseline
-        weekly_performance = {}
-        for day in dow_stats.index:
-            day_avg = dow_stats.loc[day, 'mean']
-            performance = ((day_avg - overall_avg) / overall_avg) * 100
-            weekly_performance[day] = {
-                'average_price': round(day_avg, 2),
-                'vs_monthly_avg': round(performance, 2),
-                'is_better_than_monthly': day_avg > overall_avg
-            }
-        
-        return {
-            'best_day': best_day,
-            'weekly_performance': weekly_performance,
-            'monthly_baseline': round(overall_avg, 2)
-        }
-    
-    def run_comprehensive_analysis(self):
-        """Run all analysis components"""
-        print("🔬 Starting comprehensive analysis...")
-        
-        # Fetch data
-        if not self.fetch_data_from_website():
-            print("❌ Failed to fetch data")
-            return None
-        
-        # Run analyses
-        print("📊 Calculating basic statistics...")
-        basic_stats = self.analyze_basic_stats()
-        
-        print("🌀 Analyzing seasonality...")
-        seasonality = self.analyze_seasonality()
-        
-        print("📈 Analyzing trends...")
-        trends = self.analyze_trends()
-        
-        print("📅 Analyzing monthly fluctuations...")
-        monthly_fluct = self.analyze_monthly_fluctuations()
-        
-        print("📆 Analyzing weekly patterns...")
-        weekly_patterns = self.analyze_weekly_patterns()
-        
-        # Combine results
+    def __init__(self) -> None:
+        self.df: pd.DataFrame | None = None
+        self.analysis_results: dict[str, Any] = {}
+
+    # ─────────────────────────── Networking ──────────────────────────── #
+
+    def fetch_data_from_website(self) -> None:
+        """Download CSV with retry + MIME-type guard."""
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                print(f"🔄 Fetching data (attempt {attempt}) …")
+                r = requests.get(CSV_URL, timeout=TIMEOUT)
+                r.raise_for_status()
+
+                if "text/csv" not in r.headers.get("Content-Type", ""):
+                    raise ValueError(
+                        f"Unexpected MIME type: {r.headers.get('Content-Type')}"
+                    )
+
+                self.df = self._parse_csv(r.text)
+                return  # success → exit method
+
+            except (RequestException, ValueError, pd.errors.ParserError) as e:
+                print(f"⚠️  Attempt {attempt} failed: {e}")
+                if attempt == MAX_RETRIES:
+                    raise
+                time.sleep(BACKOFF[attempt - 1])
+
+    @staticmethod
+    def _parse_csv(raw: str) -> pd.DataFrame:
+        """Parse CSV, auto-detect columns, basic cleaning."""
+        df = pd.read_csv(StringIO(raw))
+
+        date_col = next(
+            (c for c in df.columns if "date" in c.lower()), df.columns[0]
+        )
+        price_col = next(
+            (
+                c
+                for c in df.columns
+                if any(k in c.lower() for k in ("price", "cash", "settlement"))
+            ),
+            None,
+        )
+        if price_col is None:
+            raise ValueError("Could not detect price column")
+
+        df = df.rename(columns={date_col: "Date", price_col: "Price"})
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+        df["Price"] = pd.to_numeric(df["Price"], errors="coerce")
+        df = (
+            df.dropna(subset=["Date", "Price"])
+            .query("Price > 0")
+            .sort_values("Date")
+            .reset_index(drop=True)
+        )
+
+        if len(df) < 2000:
+            raise ValueError(f"Dataset too small: {len(df)} rows")
+
+        # enrich calendar fields
+        df["Year"] = df["Date"].dt.year
+        df["MonthName"] = df["Date"].dt.month_name()
+        df["DayName"] = df["Date"].dt.day_name()
+
+        print(
+            f"🎯 Clean dataset: {len(df)} rows "
+            f"({df['Date'].min().date()} → {df['Date'].max().date()})"
+        )
+        return df
+
+    # ──────────────────────────── Analytics ──────────────────────────── #
+
+    def run(self) -> None:
+        """Fetch data + compute all analyses."""
+        self.fetch_data_from_website()
         self.analysis_results = {
-            'key_metrics': {
-                **basic_stats,
-                'trend_direction': trends['trend_direction'],
-                'best_month': seasonality['best_month'],
-                'best_day': seasonality['best_day']
-            },
-            'seasonality': seasonality,
-            'trend': trends,
-            'monthly_fluctuations': monthly_fluct,
-            'weekly_patterns': weekly_patterns
+            "key_metrics": self._basic_stats(),
+            "seasonality": self._seasonality(),
+            "trend": self._trend(),
+            "monthly_fluctuations": self._monthly_fluct(),
+            "weekly_patterns": self._weekly_patterns(),
         }
-        
-        print("✅ Analysis completed successfully!")
-        return self.analysis_results
-    
-    def save_results(self):
-        """Save results to JSON files for GitHub Pages"""
-        os.makedirs('docs', exist_ok=True)
-        
-        # Prepare complete response data
-        response_data = {
-            'status': 'success',
-            'message': 'Analysis completed successfully',
-            'timestamp': datetime.now().isoformat(),
-            'data_source': 'https://infilearnai.com/LME_Cu_Dashboard/lme_copper_historical_data.csv',
-            'results': self.analysis_results,
-            'raw_data': {
-                'dates': self.df['Date'].dt.strftime('%Y-%m-%d').tolist(),
-                'prices': self.df['Price'].round(2).tolist()
+        # inject summary fields
+        km = self.analysis_results["key_metrics"]
+        km["trend_direction"] = self.analysis_results["trend"][
+            "trend_direction"
+        ]
+        km["best_month"] = self.analysis_results["seasonality"]["best_month"]
+        km["best_day"] = self.analysis_results["seasonality"]["best_day"]
+
+    # -------------------- individual analysis helpers ------------------ #
+    def _basic_stats(self) -> dict[str, Any]:
+        p = self.df["Price"]
+        return {
+            "average_price": round(p.mean(), 2),
+            "min_price": round(p.min(), 2),
+            "max_price": round(p.max(), 2),
+            "volatility": round(p.std(ddof=1) / p.mean() * 100, 2),
+            "total_records": len(p),
+        }
+
+    def _seasonality(self) -> dict[str, Any]:
+        mo_mean = self.df.groupby("MonthName")["Price"].mean().round(2)
+        dow_mean = self.df.groupby("DayName")["Price"].mean().round(2)
+        return {
+            "monthly": {"mean": mo_mean.to_dict()},
+            "day_of_week": {"mean": dow_mean.to_dict()},
+            "best_month": mo_mean.idxmax(),
+            "best_day": dow_mean.idxmax(),
+        }
+
+    def _trend(self) -> dict[str, Any]:
+        x = np.arange(len(self.df))
+        slope, _, r, p, _ = stats.linregress(x, self.df["Price"].values)
+        direction = "Upward" if p < 0.05 and slope > 0 else "Downward" if p < 0.05 else "Flat"
+        return {
+            "slope": round(slope, 6),
+            "r_squared": round(r**2, 4),
+            "p_value": round(p, 4),
+            "trend_direction": direction,
+        }
+
+    def _monthly_fluctuations(self) -> dict[str, Any]:
+        g = (
+            self.df.assign(YearMonth=self.df["Date"].dt.to_period("M"))
+            .groupby("YearMonth")["Price"]
+            .mean()
+        )
+        pct = g.pct_change().dropna() * 100
+        return {
+            "mom_changes": pct.round(2).tolist(),
+            "mom_dates": pct.index.astype(str).tolist(),
+            "base_price": round(g.mean(), 2),
+            "volatility": round(pct.std(), 2),
+        }
+
+    def _weekly_patterns(self) -> dict[str, Any]:
+        m = self.df.groupby("DayName")["Price"].agg(["mean", "count"]).round(2)
+        overall = self.df["Price"].mean()
+        return {
+            "best_day": m["mean"].idxmax(),
+            "weekly_performance": {
+                d: {
+                    "average_price": m.loc[d, "mean"],
+                    "vs_monthly_avg": round((m.loc[d, "mean"] - overall) / overall * 100, 2),
+                    "is_better_than_monthly": m.loc[d, "mean"] > overall,
+                }
+                for d in m.index
             },
-            'metadata': {
-                'total_records': len(self.df),
-                'date_range': {
-                    'start': self.df['Date'].min().strftime('%Y-%m-%d'),
-                    'end': self.df['Date'].max().strftime('%Y-%m-%d')
+            "monthly_baseline": round(overall, 2),
+        }
+
+    # ──────────────────────────── Output ─────────────────────────────── #
+
+    def save_results(self) -> None:
+        """Write docs/analysis.json + helper files atomically."""
+        os.makedirs("docs", exist_ok=True)
+
+        payload = {
+            "status": "success",
+            "message": "Analysis completed successfully",
+            "timestamp": datetime.utcnow().isoformat(),
+            "data_source": CSV_URL,
+            "results": self.analysis_results,
+            "raw_data": {
+                "dates": self.df["Date"].dt.strftime("%Y-%m-%d").tolist(),
+                "prices": self.df["Price"].round(2).tolist(),
+            },
+            "metadata": {
+                "total_records": len(self.df),
+                "date_range": {
+                    "start": self.df["Date"].min().strftime("%Y-%m-%d"),
+                    "end": self.df["Date"].max().strftime("%Y-%m-%d"),
                 },
-                'analysis_version': '1.0',
-                'github_action': True
-            }
+                "analysis_version": "1.1",
+            },
         }
-        
-        # Save main analysis results
-        with open('docs/analysis.json', 'w') as f:
-            json.dump(response_data, f, indent=2, default=str)
-        
-        # Save timestamp for cache busting
-        with open('docs/last_updated.json', 'w') as f:
-            json.dump({
-                'timestamp': datetime.now().isoformat(),
-                'unix_timestamp': int(datetime.now().timestamp())
-            }, f)
-        
-        # Create a simple index.html for GitHub Pages
-        index_html = '''<!DOCTYPE html>
-<html>
+
+        self._atomic_write("docs/analysis.json", json.dumps(payload, indent=2))
+        self._atomic_write(
+            "docs/last_updated.json",
+            json.dumps(
+                {
+                    "timestamp": payload["timestamp"],
+                    "unix_timestamp": int(datetime.utcnow().timestamp()),
+                }
+            ),
+        )
+        self._atomic_write(
+            "docs/index.html",
+            _INDEX_HTML_TEMPLATE.replace("{JSON_URL}", CSV_URL),
+        )
+        print("💾 docs/analysis.json written atomically")
+
+    @staticmethod
+    def _atomic_write(path: str, content: str) -> None:
+        """Write via temp + rename to avoid half-written files."""
+        tmp = f"{path}.tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            f.write(content)
+        os.replace(tmp, path)
+
+
+# ────────────────────────────── HTML ───────────────────────────────── #
+
+_INDEX_HTML_TEMPLATE = """\
+<!DOCTYPE html>
+<html lang="en">
 <head>
-    <title>Copper Analysis API</title>
-    <style>
-        body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
-        .endpoint { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
-        code { background: #e1e1e1; padding: 2px 5px; border-radius: 3px; }
-    </style>
+<meta charset="utf-8">
+<title>LME Copper Analysis API</title>
+<style>
+body{font-family:system-ui;padding:2rem 5%;max-width:900px;margin:auto;}
+code{background:#f5f5f5;padding:2px 4px;border-radius:3px;}
+</style>
 </head>
 <body>
-    <h1>🔶 Copper Price Analysis API</h1>
-    <p>Automated analysis of LME copper prices from infilearnai.com</p>
-    
-    <h2>📊 Available Endpoints</h2>
-    
-    <div class="endpoint">
-        <h3>Analysis Results</h3>
-        <p><code>GET /analysis.json</code></p>
-        <p>Complete analysis results with trends, seasonality, and weekly patterns.</p>
-        <a href="analysis.json" target="_blank">View JSON →</a>
-    </div>
-    
-    <div class="endpoint">
-        <h3>Last Updated</h3>
-        <p><code>GET /last_updated.json</code></p>
-        <p>Timestamp of last analysis update.</p>
-        <a href="last_updated.json" target="_blank">View JSON →</a>
-    </div>
-    
-    <h2>🔄 Update Schedule</h2>
-    <p>Analysis runs automatically every 6 hours via GitHub Actions.</p>
-    
-    <h2>📈 Integration</h2>
-    <p>Use this API endpoint in your dashboard:</p>
-    <code>https://your-username.github.io/copper-analysis/analysis.json</code>
-</body>
-</html>'''
-        
-        with open('docs/index.html', 'w') as f:
-            f.write(index_html)
-        
-        print(f"💾 Results saved to docs/analysis.json")
-        print(f"📄 GitHub Pages index created")
+<h1>📈 LME Copper Price Analysis API</h1>
+<p>Automated every 6 h by GitHub Actions.</p>
 
-def main():
-    print("🚀 Starting Copper Price Analysis for GitHub Actions")
-    
+<h2>Endpoints</h2>
+<ul>
+<li><code>GET /analysis.json</code> – full analysis</li>
+<li><code>GET /last_updated.json</code> – last run timestamp</li>
+</ul>
+
+<p>Data source: <a href="{JSON_URL}">{JSON_URL}</a></p>
+</body>
+</html>"""
+
+
+# ──────────────────────────── Entry-point ──────────────────────────── #
+
+def main() -> None:
+    print("🚀 Starting Copper price analysis")
     analyzer = CopperPriceAnalyzer()
-    results = analyzer.run_comprehensive_analysis()
-    
-    if results:
+    try:
+        analyzer.run()
         analyzer.save_results()
-        print("🎉 Analysis completed and saved!")
-    else:
-        print("💥 Analysis failed!")
-        exit(1)
+    except Exception as exc:  # pylint: disable=broad-except
+        print(f"❌ Fatal error: {exc}")
+        sys.exit(1)
+    print("✅ Completed successfully")
+    sys.exit(0)
+
 
 if __name__ == "__main__":
     main()
-
-def main():
-    print("🚀 Starting Copper Price Analysis for GitHub Actions")
-    analyzer = CopperPriceAnalyzer()
-    
-    try:
-        results = analyzer.run_comprehensive_analysis()
-        if results:
-            analyzer.save_results()
-            print("🎉 Analysis completed and saved!")
-            return 0  # Success
-        else:
-            print("💥 Analysis failed!")
-            return 1  # Error
-    except Exception as e:
-        print(f"❌ Unexpected error: {e}")
-        return 1  # Error
-
-if __name__ == "__main__":
-    exit_code = main()
-    exit(exit_code)
