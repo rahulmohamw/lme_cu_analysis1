@@ -322,3 +322,24 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+def main():
+    print("🚀 Starting Copper Price Analysis for GitHub Actions")
+    analyzer = CopperPriceAnalyzer()
+    
+    try:
+        results = analyzer.run_comprehensive_analysis()
+        if results:
+            analyzer.save_results()
+            print("🎉 Analysis completed and saved!")
+            return 0  # Success
+        else:
+            print("💥 Analysis failed!")
+            return 1  # Error
+    except Exception as e:
+        print(f"❌ Unexpected error: {e}")
+        return 1  # Error
+
+if __name__ == "__main__":
+    exit_code = main()
+    exit(exit_code)
