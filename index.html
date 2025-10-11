@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LME Copper Price Analysis API</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+        .endpoint { background: #f5f5f5; padding: 15px; margin: 10px 0; border-radius: 5px; }
+        code { background: #e0e0e0; padding: 2px 5px; border-radius: 3px; }
+    </style>
+</head>
+<body>
+    <h1>📈 LME Copper Price Analysis API</h1>
+    <p>Automated analysis of LME copper prices from infilearnai.com</p>
+    
+    <h2>API Endpoints</h2>
+    
+    <div class="endpoint">
+        <h3><code>GET /analysis.json</code></h3>
+        <p>Complete analysis results with trends, seasonality, and weekly patterns.</p>
+        <a href="analysis.json">View JSON →</a>
+    </div>
+    
+    <div class="endpoint">
+        <h3><code>GET /last_updated.json</code></h3>
+        <p>Timestamp of last analysis update.</p>
+        <a href="last_updated.json">View JSON →</a>
+    </div>
+    
+    <p><strong>Analysis runs automatically every 6 hours via GitHub Actions.</strong></p>
+    
+    <h3>Usage Example</h3>
+    <p>Use this API endpoint in your dashboard:</p>
+    <code>https://your-username.github.io/copper-analysis/analysis.json</code>
+</body>
+</html>
